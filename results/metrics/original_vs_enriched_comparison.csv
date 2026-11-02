@@ -1,0 +1,7 @@
+Model,Original_flagged,Enriched_flagged,Same_transactions,Jaccard_similarity
+IF_2,200,200,181,0.8265
+IF_5,500,500,438,0.7794
+LOF_20_2,200,200,163,0.6878
+LOF_20_5,500,500,421,0.7271
+LOF_50_2,200,200,167,0.7167
+LOF_50_5,500,500,430,0.7544

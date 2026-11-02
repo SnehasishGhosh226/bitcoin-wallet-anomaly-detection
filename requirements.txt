@@ -6,4 +6,6 @@ seaborn
 scikit-learn
 jupyter
 ipykernel
+streamlit
+joblib
 "@ | Set-Content requirements.txt
