@@ -1,598 +1,453 @@
-
 from pathlib import Path
-
 import pandas as pd
 import streamlit as st
 
-
-# --------------------------------------------------
-# 1. PAGE CONFIGURATION
-# --------------------------------------------------
-
+# ------------------------------------------------------------
+# PAGE CONFIGURATION
+# ------------------------------------------------------------
 st.set_page_config(
     page_title="Bitcoin Anomaly Intelligence",
-    page_icon="",
+    page_icon="₿",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 ROOT = Path(__file__).resolve().parent
 METRICS = ROOT / "results" / "metrics"
 PLOTS = ROOT / "results" / "plots"
 
+PROJECT_TITLE = "Bitcoin Wallet Behaviour Clustering for Suspicious Pattern Identification"
+PROBLEM_CODE = "SIH26146"
 
-# --------------------------------------------------
-# 2. CUSTOM STYLING
-# --------------------------------------------------
-
+# ------------------------------------------------------------
+# DESIGN
+# ------------------------------------------------------------
 st.markdown("""
 <style>
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 3rem;
-        max-width: 1450px;
-    }
-
-    [data-testid="stMetric"] {
-        background: #172235;
-        border: 1px solid #293a52;
-        padding: 18px;
-        border-radius: 12px;
-    }
-
-    [data-testid="stMetricLabel"] {
-        color: #b8c7da;
-    }
-
-    [data-testid="stMetricValue"] {
-        color: #ffffff;
-    }
-
-    .hero {
-        padding: 28px;
-        border-radius: 16px;
-        background: linear-gradient(120deg, #14243b, #203c5c);
-        border: 1px solid #35506e;
-        margin-bottom: 25px;
-    }
-
-    .hero h1 {
-        color: white;
-        font-size: 2.2rem;
-        margin-bottom: 8px;
-    }
-
-    .hero p {
-        color: #d1deed;
-        font-size: 1rem;
-    }
-
-    .section-note {
-        color: #8b98a9;
-        font-size: 0.9rem;
-    }
-
-    .warning-note {
-        padding: 15px;
-        border-radius: 10px;
-        background: #382d1c;
-        border: 1px solid #796037;
-        color: #f4dfb7;
-        margin-top: 15px;
-        margin-bottom: 15px;
-    }
+.block-container {max-width: 1480px; padding-top: 1.6rem; padding-bottom: 3rem;}
+[data-testid="stSidebar"] {border-right: 1px solid #263950;}
+[data-testid="stMetric"] {
+    background: #111d2e; border: 1px solid #263950;
+    border-radius: 13px; padding: 16px 18px;
+}
+[data-testid="stMetricLabel"] {color: #b7c7d9;}
+[data-testid="stMetricValue"] {color: #f4f8fc;}
+.hero {
+    background: linear-gradient(120deg,#102238,#183b56 65%,#1b4b61);
+    border: 1px solid #31536d; border-radius: 18px;
+    padding: 30px 32px; margin-bottom: 22px;
+}
+.hero-kicker {color:#8bd3dd; text-transform:uppercase; letter-spacing:.13em;
+    font-size:.76rem; font-weight:700; margin-bottom:10px;}
+.hero h1 {color:white; font-size:clamp(1.7rem,3vw,2.5rem); margin:0 0 12px;}
+.hero p {color:#d0dfeb; max-width:900px; margin-bottom:0;}
+.panel {background:#111d2e; border:1px solid #263950; border-radius:13px;
+    padding:17px 19px; min-height:115px;}
+.panel h4 {color:#edf4fb; margin:0 0 8px; font-size:1rem;}
+.panel p {color:#b8c7d8; margin:0; font-size:.92rem;}
+.kicker {color:#8bd3dd; text-transform:uppercase; letter-spacing:.1em;
+    font-size:.72rem; font-weight:700;}
+.notice {border-left:4px solid #d5a85b; background:rgba(120,88,35,.16);
+    padding:13px 16px; border-radius:7px; color:#e8d8b8; margin:12px 0;}
+hr {border-color:#263950;}
 </style>
 """, unsafe_allow_html=True)
 
-
-
-# --------------------------------------------------
-# 3. DATA LOADING
-# --------------------------------------------------
-
-@st.cache_data
+# ------------------------------------------------------------
+# DATA LOADING
+# ------------------------------------------------------------
+@st.cache_data(show_spinner=False)
 def load_csv(filename):
     path = METRICS / filename
-
-    if path.exists():
+    if not path.is_file():
+        return None
+    try:
         return pd.read_csv(path)
+    except Exception as exc:
+        return {"_error": str(exc), "_filename": filename}
 
-    return None
+@st.cache_data(show_spinner=False)
+def load_image(filename):
+    path = PLOTS / filename
+    return path.read_bytes() if path.is_file() else None
 
+def is_error(data):
+    return isinstance(data, dict) and "_error" in data
 
-# Load all project results
-evaluation = load_csv("model_evaluation.csv")
-enriched_evaluation = load_csv("enriched_model_evaluation.csv")
-agreement = load_csv("model_agreement.csv")
-comparison = load_csv("original_vs_enriched_comparison.csv")
-false_positives = load_csv("false_positive_summary.csv")
-original_flags = load_csv("transaction_anomaly_flags.csv")
-enriched_flags = load_csv("enriched_transaction_anomaly_flags.csv")
-pca_comparison = load_csv("pca_variance_comparison.csv")
-
-
-# Temporary diagnostic output
-if evaluation is not None:
-    evaluation = evaluation.rename(columns={
+def normalise_evaluation(data):
+    if data is None or is_error(data):
+        return data
+    data = data.copy()
+    data.columns = [str(c).strip() for c in data.columns]
+    return data.rename(columns={
         "F1 Score": "F1_score",
-        "Flagged Transactions": "Flagged_total"
+        "F1-score": "F1_score",
+        "F1": "F1_score",
+        "Flagged Transactions": "Flagged_total",
+        "Flagged": "Flagged_total",
+        "Flagged Count": "Flagged_total",
     })
 
-if enriched_evaluation is not None:
-    enriched_evaluation = enriched_evaluation.rename(columns={
-        "F1 Score": "F1_score",
-        "Flagged Transactions": "Flagged_total"
+def show_missing(filename, data=None):
+    if is_error(data):
+        st.error(f"Could not read {filename}: {data['_error']}")
+    else:
+        st.error(f"Required file not found: results/metrics/{filename}")
+
+def model_columns(data):
+    if data is None or is_error(data):
+        return []
+    return [c for c in data.columns if str(c).startswith(("IF_", "LOF_"))]
+
+def to_bool(series):
+    if pd.api.types.is_bool_dtype(series):
+        return series
+    return series.astype(str).str.strip().str.lower().map({
+        "true": True, "1": True, "yes": True,
+        "false": False, "0": False, "no": False,
     })
 
-# Helper function for missing result files
-def show_missing_file(filename):
-    st.error(
-        f"Required result file not found: {filename}"
-    )
+DATA = {
+    "evaluation": normalise_evaluation(load_csv("model_evaluation.csv")),
+    "enriched_evaluation": normalise_evaluation(load_csv("enriched_model_evaluation.csv")),
+    "agreement": load_csv("model_agreement.csv"),
+    "comparison": load_csv("original_vs_enriched_comparison.csv"),
+    "false_positives": load_csv("false_positive_summary.csv"),
+    "original_flags": load_csv("transaction_anomaly_flags.csv"),
+    "enriched_flags": load_csv("enriched_transaction_anomaly_flags.csv"),
+    "pca": load_csv("pca_variance_comparison.csv"),
+}
 
+# ------------------------------------------------------------
+# NAVIGATION
+# ------------------------------------------------------------
+with st.sidebar:
+    st.markdown("## ₿ BITCOIN ANALYTICS")
+    st.caption("UNSUPERVISED LEARNING PROJECT")
+    st.divider()
+    page = st.radio("NAVIGATION", [
+        "Overview", "Model Performance", "Feature Comparison",
+        "Visual Analytics", "Transaction Explorer", "Methodology"
+    ])
+    st.divider()
+    st.markdown("**PROJECT INFORMATION**")
+    st.caption(f"Problem code: {PROBLEM_CODE}")
+    st.caption("Dataset: Elliptic Bitcoin Dataset")
+    st.caption("Methods: Isolation Forest · LOF")
+    st.caption("Visualisation: PCA")
+    st.caption("Feature sets: 165 and 167")
+    st.divider()
+    st.caption("Research prototype · Precomputed results")
 
-def metric_value(dataframe, column):
-    if dataframe is not None and column in dataframe.columns:
-        return dataframe[column].sum()
-
-    return None
-
-
-# --------------------------------------------------
-# 4. SIDEBAR NAVIGATION
-# --------------------------------------------------
-
-st.sidebar.title("BITCOIN ANALYTICS")
-st.sidebar.caption("Unsupervised Learning Project")
-
-page = st.sidebar.radio(
-    "NAVIGATION",
-    [
-        "Overview",
-        "Model Performance",
-        "Feature Comparison",
-        "Visual Analytics",
-        "Transaction Explorer",
-        "Methodology"
-    ]
-)
-
-st.sidebar.divider()
-
-st.sidebar.markdown("**PROJECT INFORMATION**")
-st.sidebar.caption("Dataset: Elliptic Bitcoin Dataset")
-st.sidebar.caption("Problem Code: SIH26146")
-st.sidebar.caption("Methods: Isolation Forest and LOF")
-st.sidebar.caption("Visualisation: PCA")
-
-
-# --------------------------------------------------
-# 5. OVERVIEW
-# --------------------------------------------------
-
+# ------------------------------------------------------------
+# OVERVIEW
+# ------------------------------------------------------------
 if page == "Overview":
-
-    st.markdown("""
+    st.markdown(f"""
     <div class="hero">
-        <h1>Bitcoin Anomaly Intelligence</h1>
-        <p>
-        Bitcoin Wallet Behaviour Clustering for Suspicious
-        Pattern Identification
-        </p>
-        <p>
-        An unsupervised learning study comparing Isolation Forest,
-        Local Outlier Factor and PCA-based visual analysis.
-        </p>
+      <div class="hero-kicker">Unsupervised learning · {PROBLEM_CODE}</div>
+      <h1>Bitcoin Anomaly Intelligence</h1>
+      <p>{PROJECT_TITLE}</p>
+      <p style="margin-top:12px">An experimental comparison of Isolation Forest and
+      Local Outlier Factor, with PCA visualisation and transaction-network
+      feature enrichment.</p>
     </div>
     """, unsafe_allow_html=True)
 
-    st.subheader("Project Dashboard")
-
-    c1, c2, c3, c4 = st.columns(4)
-
-    c1.metric("Transactions analysed", "10,000")
-    c2.metric("Original features", "165")
-    c3.metric("Enriched features", "167")
-    c4.metric("Model configurations", "6")
-
+    st.markdown('<div class="kicker">EXPERIMENT AT A GLANCE</div>', unsafe_allow_html=True)
+    a, b, c, d = st.columns(4)
+    a.metric("Transactions sampled", "10,000")
+    b.metric("Original features", "165")
+    c.metric("Enriched features", "167")
+    d.metric("Model configurations", "6")
     st.divider()
 
-    left, right = st.columns(2)
-
+    left, right = st.columns([1.15, .85], gap="large")
     with left:
-        st.subheader("Research Objective")
-
-        st.write("""
-        Identify unusual transaction patterns using unsupervised
-        anomaly-detection methods, compare their outputs and
-        examine their consistency against available dataset labels.
-        """)
-
-        st.subheader("Algorithms")
-
+        st.subheader("Research objective")
+        st.write(
+            "Investigate whether unsupervised anomaly-detection methods identify "
+            "unusual transaction patterns, compare the observations they flag, "
+            "and assess how transaction-network connectivity features change results."
+        )
+        st.subheader("Methods used")
         st.markdown("""
-        - **Isolation Forest:** Identifies observations that are
-          relatively easy to isolate.
-        - **Local Outlier Factor:** Identifies observations with
-          unusually low local density.
-        - **PCA:** Projects high-dimensional features into
-          two dimensions for visual inspection.
+        - **Isolation Forest:** identifies observations relatively easy to isolate.
+        - **Local Outlier Factor:** compares local density with neighbouring observations.
+        - **PCA:** projects high-dimensional features into two dimensions for inspection.
         """)
-
     with right:
-        st.subheader("Experimental Design")
-
-        st.markdown("""
-        | Feature set | Number of features |
-        |---|---:|
-        | Original | 165 |
-        | Enriched | 167 |
-        """)
-
-        st.markdown("""
-        **Additional network features**
-
-        - Incoming transaction connections
-        - Outgoing transaction connections
-        """)
+        st.subheader("Experimental feature sets")
+        st.dataframe(pd.DataFrame({
+            "Feature set": ["Original", "Graph-enriched"],
+            "Feature count": [165, 167],
+            "Additional variables": ["None", "Incoming and outgoing connections"],
+        }), hide_index=True, use_container_width=True)
+        st.subheader("Dataset")
+        st.write("203,769 transactions, 165 numerical features, class labels and 234,355 transaction relationships.")
 
     st.markdown("""
-    <div class="warning-note">
-    <b>Responsible interpretation:</b> An anomaly is an unusual
-    observation, not proof of illicit activity. The dataset supports
-    transaction-level analysis; it does not directly establish
-    individual wallet ownership or identity.
-    </div>
+    <div class="notice"><strong>Responsible interpretation:</strong> An anomaly is
+    an unusual observation, not proof of illicit activity. This is transaction-level
+    analysis; the dataset does not directly establish wallet ownership or identity.</div>
     """, unsafe_allow_html=True)
 
+    st.subheader("Dashboard sections")
+    cols = st.columns(3)
+    descriptions = [
+        ("01 · Compare", "Inspect precision, recall and F1-score across model configurations."),
+        ("02 · Investigate", "Examine how transaction connections affect anomaly flags."),
+        ("03 · Interpret", "Review PCA projections, agreement measures and limitations."),
+    ]
+    for col, (title, body) in zip(cols, descriptions):
+        with col:
+            st.markdown(f'<div class="panel"><h4>{title}</h4><p>{body}</p></div>', unsafe_allow_html=True)
 
-# --------------------------------------------------
-# 6. MODEL PERFORMANCE
-# --------------------------------------------------
-
+# ------------------------------------------------------------
+# MODEL PERFORMANCE
+# ------------------------------------------------------------
 elif page == "Model Performance":
-
     st.title("Model Performance")
-    st.caption("Evaluation against known licit and illicit labels.")
+    st.caption("Post-hoc evaluation against known licit and illicit labels. Unknown labels are excluded.")
+    original = DATA["evaluation"]
+    enriched = DATA["enriched_evaluation"]
 
-    if evaluation is None or enriched_evaluation is None:
-        show_missing_file("model_evaluation.csv or enriched_model_evaluation.csv")
+    if original is None or is_error(original):
+        show_missing("model_evaluation.csv", original)
+    if enriched is None or is_error(enriched):
+        show_missing("enriched_model_evaluation.csv", enriched)
 
-    else:
-        feature_choice = st.radio(
-            "Select feature set",
-            ["Original features", "Enriched features"],
-            horizontal=True
-        )
+    if original is not None and enriched is not None and not is_error(original) and not is_error(enriched):
+        choice = st.radio("Feature set", ["Original features", "Enriched features"], horizontal=True)
+        selected = original if choice == "Original features" else enriched
+        required = ["Model", "Precision", "Recall", "F1_score"]
+        missing = [x for x in required if x not in selected.columns]
 
-        selected = (
-            evaluation
-            if feature_choice == "Original features"
-            else enriched_evaluation
-        )
-
-        st.subheader(f"{feature_choice} — Evaluation Metrics")
-
-        st.dataframe(
-            selected.style.format({
-                "Precision": "{:.4f}",
-                "Recall": "{:.4f}",
-                "F1_score": "{:.4f}"
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        # Standardise metric column names
-        selected = selected.rename(columns={
-            "F1": "F1_score",
-            "F1 Score": "F1_score",
-            "F1-score": "F1_score"
-        })
-
-        required_columns = ["Model", "Precision", "Recall", "F1_score"]
-
-        if all(col in selected.columns for col in required_columns):
-            st.subheader("Model Metric Comparison")
-
-            chart_data = selected.set_index("Model")[
-                ["Precision", "Recall", "F1_score"]
-            ]
-            st.bar_chart(chart_data)
+        if missing:
+            st.error("Missing evaluation columns: " + ", ".join(missing))
+            st.caption("Available: " + ", ".join(selected.columns))
+        else:
+            st.subheader(f"{choice} · Evaluation results")
+            fmt = {c: "{:.4f}" for c in ["Precision", "Recall", "F1_score"]}
+            st.dataframe(selected.style.format(fmt, na_rep="—"), use_container_width=True, hide_index=True)
 
             best = selected.loc[selected["F1_score"].idxmax()]
-            st.info(
-                f"Highest F1 score in this feature set: "
-                f"{best['Model']} — {best['F1_score']:.4f}"
-            )
-            st.caption(
-                "Metrics exclude transactions labelled unknown. "
-                "The anomaly flag is treated as a predicted illicit label "
-                "only for this post-hoc evaluation."
-            )
-        else:
-            st.error(
-                "Required evaluation columns are missing. "
-                f"Available columns: {selected.columns.tolist()}"
-            )
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Best F1-score", f"{best['F1_score']:.4f}")
+            m2.metric("Precision", f"{best['Precision']:.4f}")
+            m3.metric("Recall", f"{best['Recall']:.4f}")
+            if "Flagged_total" in selected.columns:
+                m4.metric("Flagged transactions", f"{int(best['Flagged_total']):,}")
+            else:
+                m4.metric("Best configuration", str(best["Model"]))
 
+            st.info(f"Highest F1-score in this feature set: **{best['Model']}** ({best['F1_score']:.4f}). This is the best tested configuration, not evidence of production-ready detection.")
+            st.subheader("Metric comparison")
+            st.bar_chart(selected.set_index("Model")[["Precision", "Recall", "F1_score"]], height=340)
+            if "Flagged_total" in selected.columns:
+                st.subheader("Flagged observations by configuration")
+                st.bar_chart(selected.set_index("Model")[["Flagged_total"]], height=240)
 
-# --------------------------------------------------
-# 7. FEATURE COMPARISON
-# --------------------------------------------------
+    st.markdown("""
+    <div class="notice">Anomaly flags are treated as predicted illicit labels only
+    for post-hoc evaluation. Unknown transactions are excluded from the metrics.</div>
+    """, unsafe_allow_html=True)
 
+# ------------------------------------------------------------
+# FEATURE COMPARISON
+# ------------------------------------------------------------
 elif page == "Feature Comparison":
-
     st.title("Original vs Enriched Features")
+    st.caption("Investigate whether transaction-network connectivity features change model decisions.")
 
-    st.write("""
-    This section examines how adding transaction-network connectivity
-    features changes the anomaly decisions made by each model.
-    """)
-
-    if comparison is not None:
-
-        st.subheader("Anomaly Decision Consistency")
-
-        st.dataframe(
-            comparison.style.format({
-                "Jaccard_similarity": "{:.4f}"
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.subheader("Jaccard Similarity")
-
-        chart = comparison.set_index("Model")[
-            ["Jaccard_similarity"]
-        ]
-
-        st.bar_chart(chart)
-
-        st.caption(
-            "A value closer to 1 indicates greater overlap between "
-            "the original and enriched model's flagged transactions."
-        )
-
-    else:
-        show_missing_file("original_vs_enriched_comparison.csv")
-
+    st.subheader("Additional transaction-network features")
+    x, y = st.columns(2)
+    with x:
+        st.markdown('<div class="panel"><h4>Incoming connections</h4><p>Number of incoming transaction relationships recorded for a transaction.</p></div>', unsafe_allow_html=True)
+    with y:
+        st.markdown('<div class="panel"><h4>Outgoing connections</h4><p>Number of outgoing transaction relationships recorded for a transaction.</p></div>', unsafe_allow_html=True)
+    st.caption("These are transaction-network measures, not wallet ownership indicators or a complete graph-learning model.")
     st.divider()
 
-    if pca_comparison is not None:
+    comparison = DATA["comparison"]
+    if comparison is None or is_error(comparison):
+        show_missing("original_vs_enriched_comparison.csv", comparison)
+    else:
+        required = ["Model", "Jaccard_similarity"]
+        missing = [c for c in required if c not in comparison.columns]
+        if missing:
+            st.error("Comparison file is missing: " + ", ".join(missing))
+        else:
+            st.subheader("Anomaly decision consistency")
+            st.dataframe(comparison.style.format({"Jaccard_similarity": "{:.4f}"}), use_container_width=True, hide_index=True)
+            st.bar_chart(comparison.set_index("Model")[["Jaccard_similarity"]], height=300)
+            st.caption("Jaccard similarity measures overlap between original and enriched flagged transactions. Values closer to 1 indicate greater overlap.")
+            st.metric("Mean Jaccard similarity", f"{comparison['Jaccard_similarity'].mean():.4f}")
 
-        st.subheader("PCA Explained Variance")
+    st.divider()
+    st.subheader("PCA explained variance")
+    pca = DATA["pca"]
+    if pca is None or is_error(pca):
+        show_missing("pca_variance_comparison.csv", pca)
+    else:
+        st.dataframe(pca, use_container_width=True, hide_index=True)
+        st.write("The first two principal components explain approximately 17.25% of variance for the original features and 17.03% for the enriched features. Enrichment changed some anomaly decisions but did not improve this two-component variance summary.")
 
-        st.dataframe(
-            pca_comparison,
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.write(
-            "The original feature set explains 17.25% of variance "
-            "in the first two components, compared with 17.03% "
-            "for the enriched feature set."
-        )
-
-
-# --------------------------------------------------
-# 8. VISUAL ANALYTICS
-# --------------------------------------------------
-
+# ------------------------------------------------------------
+# VISUAL ANALYTICS
+# ------------------------------------------------------------
 elif page == "Visual Analytics":
-
     st.title("Visual Analytics")
-
-    plot_information = {
-        "Original Anomaly Detection Comparison":
-            "anomaly_detection_comparison.png",
-
-        "Original PCA — Transaction Labels":
-            "pca_transaction_labels.png",
-
-        "Enriched PCA — Transaction Features":
-            "pca_enriched_features.png"
+    st.caption("Explore the saved anomaly-detection and PCA figures.")
+    plots = {
+        "Original anomaly detection comparison": "anomaly_detection_comparison.png",
+        "Original PCA — transaction labels": "pca_transaction_labels.png",
+        "Enriched PCA — transaction features": "pca_enriched_features.png",
     }
-
-    selected_plot = st.selectbox(
-        "Choose visualisation",
-        list(plot_information.keys())
-    )
-
-    plot_path = PLOTS / plot_information[selected_plot]
-
-    if plot_path.exists():
-
-        st.subheader(selected_plot)
-
-        st.image(
-            str(plot_path),
-            use_container_width=True
-        )
-
+    selected_plot = st.selectbox("Choose a visualisation", list(plots))
+    image = load_image(plots[selected_plot])
+    if image is None:
+        st.error(f"Plot not found: results/plots/{plots[selected_plot]}")
     else:
-        st.error(f"Plot not found: {plot_path.name}")
+        st.subheader(selected_plot)
+        st.image(image, use_container_width=True)
 
     st.divider()
+    st.subheader("PCA interpretation")
+    st.write("PCA compresses the feature space into two principal components. These components capture only part of the total variance. Visible overlap between licit, illicit and unknown transactions does not establish that the original high-dimensional data is indistinguishable.")
+    a, b, c = st.columns(3)
+    a.metric("Original PCA variance", "17.25%")
+    b.metric("Enriched PCA variance", "17.03%")
+    c.metric("Difference", "−0.22 pp")
 
-    st.subheader("PCA Interpretation")
-
-    st.write("""
-    PCA compresses the feature space into two principal components.
-    These components capture only a portion of the total variance.
-
-    Therefore, visible overlap between licit, illicit and unknown
-    transactions does not establish that the original high-dimensional
-    data is indistinguishable.
-    """)
-
-
-# --------------------------------------------------
-# 9. TRANSACTION EXPLORER
-# --------------------------------------------------
-
+# ------------------------------------------------------------
+# TRANSACTION EXPLORER
+# ------------------------------------------------------------
 elif page == "Transaction Explorer":
-
     st.title("Transaction Explorer")
-
-    st.write("""
-    Explore the saved transaction-level anomaly flags and
-    download the experimental results.
-    """)
-
-    feature_choice = st.radio(
-        "Select result set",
-        ["Enriched features", "Original features"],
-        horizontal=True
-    )
-
-    selected_data = (
-        enriched_flags
-        if feature_choice == "Enriched features"
-        else original_flags
-    )
-
-    if selected_data is None:
-
-        st.error("The selected transaction result file was not found.")
-
+    st.caption("Filter and inspect saved transaction-level anomaly flags. These are precomputed results.")
+    choice = st.radio("Result set", ["Enriched features", "Original features"], horizontal=True)
+    if choice == "Enriched features":
+        data = DATA["enriched_flags"]
+        filename = "enriched_transaction_anomaly_flags.csv"
     else:
+        data = DATA["original_flags"]
+        filename = "transaction_anomaly_flags.csv"
 
-        st.subheader("Filter Transactions")
+    if data is None or is_error(data):
+        show_missing(filename, data)
+    else:
+        data = data.copy()
+        flags = model_columns(data)
+        if not flags:
+            st.error("No model flag columns found. Expected names beginning with IF_ or LOF_.")
+            st.caption("Available columns: " + ", ".join(data.columns))
+        else:
+            c1, c2, c3 = st.columns([1.1, 1, 1.2])
+            with c1:
+                model = st.selectbox("Model configuration", flags)
+            with c2:
+                status = st.selectbox("Transaction status", ["All", "Flagged anomalies", "Not flagged"])
+            with c3:
+                search = st.text_input("Search transaction ID", placeholder="Enter transaction ID")
 
-        model_columns = [
-            col for col in selected_data.columns
-            if col.startswith("IF_") or col.startswith("LOF_")
-        ]
+            flag_values = to_bool(data[model])
+            data["_flag_value"] = flag_values
+            filtered = data.copy()
+            if status == "Flagged anomalies":
+                filtered = filtered[filtered["_flag_value"] == True]
+            elif status == "Not flagged":
+                filtered = filtered[filtered["_flag_value"] == False]
 
-        selected_model = st.selectbox(
-            "Choose anomaly detection model",
-            model_columns
-        )
+            if search.strip():
+                id_col = next((c for c in filtered.columns if c.lower() in ["txid", "tx_id", "transaction_id"]), None)
+                if id_col is None:
+                    st.warning("No transaction ID column was found in this result file.")
+                else:
+                    filtered = filtered[filtered[id_col].astype(str).str.contains(search.strip(), case=False, na=False)]
 
-        anomaly_filter = st.selectbox(
-            "Transaction status",
-            ["All transactions", "Flagged anomalies", "Not flagged"]
-        )
+            a, b, c = st.columns(3)
+            a.metric("Transactions in file", f"{len(data):,}")
+            b.metric("Flagged by selected model", f"{int(flag_values.fillna(False).sum()):,}")
+            c.metric("Rows after filters", f"{len(filtered):,}")
 
-        filtered = selected_data.copy()
+            display = filtered.drop(columns=["_flag_value"], errors="ignore")
+            st.dataframe(display, use_container_width=True, hide_index=True, height=430)
+            st.download_button(
+                "Download filtered transactions (CSV)",
+                data=display.to_csv(index=False).encode("utf-8"),
+                file_name=f"{choice.lower().replace(' ', '_')}_filtered_transactions.csv",
+                mime="text/csv",
+            )
+            st.caption("This explorer displays saved model flags. It does not run new predictions or independently verify illicit activity.")
 
-        if anomaly_filter == "Flagged anomalies":
-            filtered = filtered[filtered[selected_model] == True]
-
-        elif anomaly_filter == "Not flagged":
-            filtered = filtered[filtered[selected_model] == False]
-
-        st.metric("Transactions displayed", len(filtered))
-
-        search = st.text_input("Search transaction ID")
-
-        if search.strip() and "txId" in filtered.columns:
-            filtered = filtered[
-                filtered["txId"].astype(str).str.contains(
-                    search.strip(),
-                    case=False,
-                    na=False
-                )
-            ]
-
-        st.dataframe(
-            filtered,
-            use_container_width=True,
-            hide_index=True
-        )
-
-        csv_data = filtered.to_csv(index=False).encode("utf-8")
-
-        st.download_button(
-            "Download filtered transactions",
-            data=csv_data,
-            file_name="filtered_transaction_results.csv",
-            mime="text/csv"
-        )
-
-
-# --------------------------------------------------
-# 10. METHODOLOGY
-# --------------------------------------------------
-
+# ------------------------------------------------------------
+# METHODOLOGY
+# ------------------------------------------------------------
 elif page == "Methodology":
-
     st.title("Methodology and Responsible Interpretation")
+    st.caption("Dataset, preprocessing, experiments and limits of inference.")
 
-    st.subheader("Dataset")
+    with st.expander("Dataset and preparation", expanded=True):
+        st.markdown("""
+        - Elliptic Bitcoin Dataset: 203,769 transactions, 165 numerical features and 234,355 transaction relationships.
+        - Transaction features were joined to labels using transaction IDs.
+        - Missing values and duplicate transaction IDs were checked.
+        - A reproducible sample of 10,000 transactions was used (`random_state=42`).
+        - Original numerical features already appeared standardised, so no additional scaling was applied to them.
+        """)
 
-    st.write("""
-    The Elliptic Bitcoin Dataset contains transaction-level
-    features, transaction classes and transaction relationships.
-    """)
+    with st.expander("Graph-connectivity feature enrichment"):
+        st.markdown("""
+        - Derived incoming and outgoing connection counts from the edge list.
+        - Applied `log1p` transformation and standardisation to these two features.
+        - Combined them with the original 165 features to create a 167-feature dataset.
+        - Total connection count was excluded because it is redundant with incoming plus outgoing counts.
+        """)
+        st.caption("These variables describe transaction relationships; they do not establish wallet ownership.")
 
-    st.subheader("Data Preparation")
+    with st.expander("Anomaly-detection configurations"):
+        st.markdown("""
+        **Isolation Forest**
+        - 200 estimators; contamination settings of 2% and 5%.
 
-    st.markdown("""
-    - Loaded transaction features, labels and edge-list data.
-    - Checked missing values and duplicate transaction IDs.
-    - Selected 165 numerical transaction features.
-    - Derived incoming and outgoing network connection counts.
-    - Applied log transformation and standardisation to the
-      two additional network features.
-    """)
+        **Local Outlier Factor**
+        - 20 and 50 neighbours; contamination settings of 2% and 5%.
+        """)
 
-    st.subheader("Anomaly Detection")
-
-    st.markdown("""
-    **Isolation Forest**
-    - 200 estimators.
-    - Contamination settings of 2% and 5%.
-
-    **Local Outlier Factor**
-    - Neighbour settings of 20 and 50.
-    - Contamination settings of 2% and 5%.
-    """)
-
-    st.subheader("Evaluation")
-
-    st.markdown("""
-    - Precision, recall and F1 score.
-    - Jaccard similarity between model outputs.
-    - Comparison of original and enriched feature sets.
-    - PCA visualisation.
-    - False-positive implications.
-    """)
+    with st.expander("Evaluation"):
+        st.markdown("""
+        - Precision, recall and F1-score using known labels only.
+        - Jaccard similarity between model outputs.
+        - Original versus enriched feature comparison.
+        - PCA visualisation and false-positive implications.
+        - Labels were not used as model inputs or to fit the unsupervised methods.
+        """)
 
     st.subheader("Limitations")
+    for heading, detail in [
+        ("Incomplete labels", "Unknown transactions are excluded from label-based evaluation."),
+        ("Sampling", "Experiments use a reproducible sample of 10,000 transactions."),
+        ("Parameter sensitivity", "Different algorithms and parameter settings flag different observations."),
+        ("PCA representation", "The first two components explain approximately 17% of variance."),
+        ("Transaction-level scope", "The dataset does not directly identify wallet owners."),
+        ("False positives", "An anomaly flag is not proof of illicit activity."),
+        ("Preprocessing reuse", "A future prediction pipeline must reuse fitted preprocessing parameters for new data."),
+        ("Dashboard scope", "The application displays precomputed results; it is not a live monitoring system."),
+    ]:
+        st.markdown(f"**{heading}:** {detail}")
+
+    st.subheader("Ethical considerations")
+    st.write("False-positive anomaly flags can cause unnecessary scrutiny, wasted investigative resources and unfair suspicion. Model outputs should be treated as indicators for further review rather than definitive judgments. No transaction or wallet should be labelled criminal solely because an unsupervised model identifies it as unusual.")
 
     st.markdown("""
-    1. The study uses a reproducible 10,000-transaction sample.
-    2. The first two PCA components explain only a small proportion
-       of total variance.
-    3. The models flag unusual transactions, not confirmed crimes.
-    4. Dataset labels are incomplete; unknown transactions are
-       excluded from label-based evaluation.
-    5. Network connectivity describes transaction relationships,
-       not verified wallet ownership.
-    6. Low precision and recall limit practical detection claims.
-    """)
+    <div class="notice"><strong>Research prototype:</strong> This dashboard presents
+    precomputed notebook results. It is not a live transaction-monitoring or
+    automated enforcement system.</div>
+    """, unsafe_allow_html=True)
 
-    st.subheader("Ethical Considerations")
-
-    st.write("""
-    False-positive anomaly flags can cause unnecessary scrutiny,
-    wasted investigative resources and unfair suspicion.
-    Model outputs should be treated as indicators for further
-    review rather than definitive judgments.
-    """)
-
-
-# --------------------------------------------------
-# 11. FOOTER
-# --------------------------------------------------
-
+# ------------------------------------------------------------
+# FOOTER
+# ------------------------------------------------------------
 st.divider()
-
-st.caption(
-    "Bitcoin Wallet Behaviour Clustering for Suspicious Pattern "
-    "Identification | SIH26146 | Unsupervised Learning Project"
-)
+st.caption(f"{PROJECT_TITLE} · {PROBLEM_CODE} · Unsupervised Learning Project")
